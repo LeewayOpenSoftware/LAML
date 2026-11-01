@@ -65,30 +65,50 @@ length. A stream ends in a `StreamStatus`; other streams are still decoded. A sc
 the end is a warning, not an error: in a multi-stream file the deferred streams continue a scope of
 their parent (all four single-stream fixtures end balanced).
 
-`SetCustomRuntimeData` is followed by a payload (ResourceDictionary, Style, VisualStateGroupCollection
-or DeferredElement data, several versions each) that this decoder does not read. The node and its
-runtime data type number are kept and the stream's status becomes `OpaqueData`: decoding stops there,
-which is reported and is not counted as a failure.
+### Runtime data payloads
 
-Nothing is created, resolved or run: ids stay ids. The text dump prints well-known ids as
+`SetCustomRuntimeData` is followed by a type number (7-bit) and a payload whose layout depends on it;
+the decoder reads all of them into `RuntimeData` records (`Node::runtimeData`), so the stream goes on
+at the right byte afterwards. Containers are a 7-bit count followed by the elements; a string is a
+16-bit id into the string table; a "token" is a 7-bit stream-offset token kept as stored (it names a
+point in a deferred stream and is not resolved); a bool is a persisted constant (true or false).
+
+| Family | Type numbers (version) | Contents |
+|---|---|---|
+| ResourceDictionary | 371 (1), 7 (2), 10 (3), 12 (4) | resources: key -> token; strings to un-defer automatically; conditional resources (3, 4); implicit style keys (1, 2). Versions 1-3 store explicit and implicit maps separately; 4 stores one map whose key is a string id plus a fixed 64-bit hash with the type flag in bit 0. Versions 3 and 4 end with the conditionally declared table (token -> predicates of type reference + argument string). |
+| Style | 2 (1), 8 (2), 11 (3) | setters: flags byte (bit 0 theme resource, 1 static resource, 2 string, 3 object, 4 property resolved, 5 container value, 6 token for itself, 7 mutable), the property (well-known/table reference, or name + owner type), then the value (string id, constant, or token). From version 3 a setter that is a token for itself has no property. Version 3 ends with the conditionally declared table. |
+| VisualStateGroupCollection | 420 (1), 1 (2), 3 (3), 4 (4), 5 (5) | state-to-group map, states (name, storyboard token, flag; from 2: property setter tokens, trigger values; from 3: extensible and collection trigger tokens; 5: static resource trigger tokens), groups, transitions, the "unexpected tokens" flag, the transition lookup tables, the whole-collection token, and (4, 5) the seen name directives. |
+| DeferredElement | 745 (1), 6 (2), 9 (3) | element name; from 2 the non-deferred properties (property, constant); from 3 the realize flag. |
+
+Strict checks: a count larger than the bytes left is a truncation, more than the limit is rejected,
+ids must be in their tables, a bool must be a bool, setter flags must fit in a byte. A type number
+that is not in the table (including 0) stops that stream with status `OpaqueData`; this is the
+documented list of unsupported versions: everything except the numbers above. In the corpus the only
+versions present are ResourceDictionary 4 and VisualStateGroupCollection 5; the other versions are
+covered by hand-built payloads in the tests (derived from the format description, not from a file),
+so they are as reliable as that reading of the format.
+
+Nothing is created, resolved or run: ids and tokens stay as stored. The text dump prints well-known ids as
 `stable-type#N` / `stable-prop#N`.
 
 ## Tools and tests
 
 * `xbfdump file.xbf` prints the header, tables and sub-stream index; exit 0 valid, 1 invalid.
-* `xbfdump --nodes file.xbf` additionally decodes and prints the node streams as an indented tree.
+* `xbfdump --nodes file.xbf` additionally decodes and prints the node streams as an indented tree,
+  with the contents of each runtime data payload under its node.
 * `tests/xbf_tests.cpp`: the five MIT fixtures (counts, versions, hash field, a string), header
   and offset errors, count and limit errors, every prefix of every fixture rejected, and a
   deterministic mutation sweep (about 22k mutated inputs) that must never crash and where an
   accepted file must have internally consistent tables.
 * `tests/xbf_nodes_tests.cpp`: the five fixtures decoded (node counts, scope balance, conditional
-  scopes, deferred and runtime-data nodes), hand-built streams for every rejection (opcode, scope,
-  reference, truncation, string and 7-bit limits, depth and node limits), truncation of every
-  fixture at every byte, 20,000 seeded byte mutations of the node streams, and stream-range damage.
+  scopes, deferred and runtime-data nodes, the decoded payload contents), hand-built streams for every
+  rejection (opcode, scope, reference, truncation, string and 7-bit limits, depth and node limits),
+  hand-built runtime data of every family and version (each followed by another node to prove the
+  framing, each cut at every byte), truncation of every fixture at every byte, 20,000 seeded byte
+  mutations of the node streams, and stream-range damage.
   Also run under UBSan and ASan with no report.
 
 ## Not covered yet
 
-The payload of `SetCustomRuntimeData`, the resolution of well-known (trusted) type and property
-indexes, version 1 files, the file-level hash check, and anything that creates objects. Those need
+The resolution of well-known (trusted) type and property indexes and of stream-offset tokens, version 1 files, the file-level hash check, and anything that creates objects. Those need
 the activation infrastructure that is not there yet and are separate steps.

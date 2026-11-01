@@ -5,6 +5,7 @@
 // truncation at every byte, and seeded mutation. Usage: xbf_nodes_tests <fixture-dir>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -56,7 +57,7 @@ static void TestCorpus(const std::string &dir)
         {"CustomTypesPage.xbf", 1, 53, 0},
         {"PageWithConditionalXaml.xbf", 1, 47, 0},
         {"SampleXbf2.xbf", 1, 449, 0},
-        {"XbfVsmTest.v2.1.xbf", 7, 8, 3},
+        {"XbfVsmTest.v2.1.xbf", 7, 38, 0},
     };
     for (const Case &c : cases)
     {
@@ -115,14 +116,38 @@ static void TestCorpus(const std::string &dir)
         DecodeNodes(d.data(), d.size(), f, dec);
         CHECK(Count(dec, NodeType::SetCustomRuntimeData) == 3);
         CHECK(Count(dec, NodeType::SetDeferredProperty) >= 2);
-        bool sawOpaque = false;
-        for (const auto &s : dec.streams)
-            if (s.status == StreamStatus::OpaqueData)
-            {
-                sawOpaque = true;
-                CHECK(!s.nodes.empty() && s.nodes.back().type == NodeType::SetCustomRuntimeData);
-            }
-        CHECK(sawOpaque);
+        CHECK(dec.opaqueStreams == 0);
+        int rd = 0, vsgc = 0;
+        for (const auto &st : dec.streams)
+            for (const auto &n : st.nodes)
+                if (n.type == NodeType::SetCustomRuntimeData)
+                {
+                    CHECK(n.runtimeData != nullptr);
+                    if (!n.runtimeData)
+                        continue;
+                    if (n.runtimeData->kind == RuntimeDataKind::ResourceDictionary)
+                    {
+                        rd++;
+                        const RuntimeData &r = *n.runtimeData;
+                        CHECK(r.version == 4 && r.resources.size() == 3);
+                        CHECK(r.resources[0].token == 3 && r.resources[1].token == 22 && r.resources[2].token == 41);
+                        CHECK(GetString(d.data(), d.size(), f, r.resources[0].key.stringId) == u"ButtonTemplateWithGroupsAndVisualStates");
+                        CHECK(!r.resources[0].key.isType);
+                    }
+                    else if (n.runtimeData->kind == RuntimeDataKind::VisualStateGroupCollection)
+                    {
+                        vsgc++;
+                        const RuntimeData &r = *n.runtimeData;
+                        CHECK(r.version == 5 && r.visualStateGroups.size() == 3);
+                        CHECK(r.entireCollectionToken == 1);
+                        CHECK(GetString(d.data(), d.size(), f, r.visualStateGroups[1].name) == u"CommonStates");
+                    }
+                }
+        CHECK(rd == 1 && vsgc == 2);
+        std::string text = DumpNodes(d.data(), d.size(), f, dec);
+        CHECK(text.find("ResourceDictionary v4") != std::string::npos);
+        CHECK(text.find("VisualStateGroupCollection v5") != std::string::npos);
+        CHECK(text.find("state \"PointerOver\"") != std::string::npos);
     }
     {
         // grid lengths: unit first, then value (derived from the corpus: a 5.0 star/pixel length)
@@ -298,12 +323,13 @@ static void TestMalformed(const std::string &dir)
         CHECK(multi.ok && mstatus({DEFER, 0, 0x80, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0}) == StreamStatus::LimitExceeded);
         CHECK(multi.ok && mstatus({DEFER, 0, 0x80, 1, 3, 0}) == StreamStatus::Truncated);
         CHECK(multi.ok && mstatus({DEFER, 0, 0x80, 7, 0, 0}) == StreamStatus::BadReference);   // 7 streams: 0..6
-        // custom runtime data: counted as a stop at the payload, with the type index recorded
-        Decoded d = multi.Run({CUSTOM, 1, 0, 0, 12, 0xAA, 0xBB});
-        CHECK(multi.ok && d.streams[0].status == StreamStatus::OpaqueData && d.ok() && d.opaqueStreams == 3);
-        CHECK(multi.ok && d.streams[0].nodes.size() == 1 && d.streams[0].nodes[0].runtimeDataType == 12 &&
-              d.streams[0].nodes[0].targetStream == 1);
         CHECK(multi.ok && mstatus({CUSTOM, 1, 0, 0}) == StreamStatus::Truncated);   // the type index is missing
+        // a runtime data version this decoder does not know stops the stream (explicit, not an error)
+        Decoded u = multi.Run({CUSTOM, 1, 0, 0, 99, 0xAA, 0xBB});
+        CHECK(multi.ok && u.streams[0].status == StreamStatus::OpaqueData && u.ok() && u.opaqueStreams == 1);
+        CHECK(multi.ok && u.streams[0].nodes.size() == 1 && u.streams[0].nodes[0].runtimeDataType == 99 &&
+              u.streams[0].nodes[0].targetStream == 1 && !u.streams[0].nodes[0].runtimeData);
+        CHECK(multi.ok && mstatus({CUSTOM, 1, 0, 0, 0}) == StreamStatus::OpaqueData);   // type 0 is "unknown"
     }
     {
         Decoded d = h.Run({CUSTOM, 0, 0, 0, 12, 0xAA, 0xBB});
@@ -311,6 +337,173 @@ static void TestMalformed(const std::string &dir)
     }
 
     (void)PSCTCBI;
+}
+
+// ---- hand-built runtime data payloads: every family and every version -------------------------------
+typedef std::vector<uint8_t> B;
+
+struct Payload
+{
+    const char *name;
+    B type;      // 7-bit encoded type index
+    B body;
+    RuntimeDataKind kind;
+    uint32_t version;
+};
+
+static B Frame(const Payload &p)
+{
+    B b = {15, 1, 0, 0};   // SetCustomRuntimeData, stream 1, no legacy resource names
+    b.insert(b.end(), p.type.begin(), p.type.end());
+    b.insert(b.end(), p.body.begin(), p.body.end());
+    return b;
+}
+
+static std::shared_ptr<const RuntimeData> RdOf(Host &h, const Payload &p)
+{
+    Decoded d = h.Run(Frame(p));
+    return d.streams[0].nodes.empty() ? nullptr : d.streams[0].nodes[0].runtimeData;
+}
+
+static void TestRuntimeData(const std::string &dir)
+{
+    Host h(dir, "XbfVsmTest.v2.1.xbf", 7);   // 34 strings, no types or properties: trusted refs below
+    CHECK(h.ok);
+    if (!h.ok)
+        return;
+    const B T371 = {0xF3, 0x02}, T420 = {0xA4, 0x03}, T745 = {0xE9, 0x05};
+    // a trusted type ref (id 5) and property ref (id 1) as stored: 16 bits little endian, bit 15 = trusted
+    const B TYPE5 = {5, 0x80}, PROP1 = {1, 0x80};
+    auto cat = [](std::initializer_list<B> parts) {
+        B r;
+        for (const B &p : parts)
+            r.insert(r.end(), p.begin(), p.end());
+        return r;
+    };
+    const B TRUE_ = {2}, FALSE_ = {1};
+
+    std::vector<Payload> all = {
+        {"RD v1", T371, cat({{1, 3, 0, 5}, {1, 4, 0}, {1, 5, 0, 6}, {0}, {1, 5, 0}}), RuntimeDataKind::ResourceDictionary, 1},
+        {"RD v2", {7}, cat({{0}, {0}, {1, 1, 0, 2}, {0}}), RuntimeDataKind::ResourceDictionary, 2},
+        {"RD v3", {10}, cat({{0}, {0}, {0}, {1, 2, 0, 2, 7, 8}, {0}, {1, 9, 1}, TYPE5, {4, 0}}), RuntimeDataKind::ResourceDictionary, 3},
+        {"RD v4", {12}, cat({{1, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, 4}, {0}, {0}, {0}}), RuntimeDataKind::ResourceDictionary, 4},
+        {"Style v1", {2}, cat({{1, 0x30}, PROP1, TRUE_}), RuntimeDataKind::Style, 1},
+        {"Style v2", {8}, cat({{1, 0x04, 1, 0}, TYPE5, {2, 0}}), RuntimeDataKind::Style, 2},
+        {"Style v3 self", {11}, cat({{1, 0x40, 77}, {0}}), RuntimeDataKind::Style, 3},
+        {"Style v3 static", {11}, cat({{1, 0x12}, PROP1, {5}, {0}}), RuntimeDataKind::Style, 3},
+        {"VSGC v1", T420, cat({{0}, {1, 2, 0, 1}, FALSE_, {0}, {0}, FALSE_, {0}, {0}, {3}}), RuntimeDataKind::VisualStateGroupCollection, 1},
+        {"VSGC v2", {1}, cat({{0}, {1, 2, 0, 1}, FALSE_, {1, 5}, {1, 1, 9}, {0}, {0}, FALSE_, {0}, {0}, {3}}), RuntimeDataKind::VisualStateGroupCollection, 2},
+        {"VSGC v3", {3}, cat({{1, 0}, {1, 2, 0, 1}, TRUE_, {0}, {0}, {1, 4}, {0}, {1, 3, 0}, FALSE_, {1}, {0}, FALSE_, {0}, {1, 0}, {3}}), RuntimeDataKind::VisualStateGroupCollection, 3},
+        {"VSGC v4", {4}, cat({{0}, {0}, {1, 3, 0}, FALSE_, {1}, {0}, FALSE_, {1, 0, 1, 2}, {0}, {3}, {1, 6, 0}}), RuntimeDataKind::VisualStateGroupCollection, 4},
+        {"VSGC v5", {5}, cat({{0}, {1, 2, 0, 1}, FALSE_, {0}, {0}, {0}, {0}, {1, 8}, {0}, {0}, FALSE_, {0}, {0}, {3}, {1, 7, 0}}), RuntimeDataKind::VisualStateGroupCollection, 5},
+        {"Deferred v1", T745, cat({{4, 0}}), RuntimeDataKind::DeferredElement, 1},
+        {"Deferred v2", {6}, cat({{4, 0}, {1}, PROP1, FALSE_}), RuntimeDataKind::DeferredElement, 2},
+        {"Deferred v3", {9}, cat({{4, 0}, {0}, TRUE_}), RuntimeDataKind::DeferredElement, 3},
+    };
+
+    for (const Payload &p : all)
+    {
+        B full = Frame(p);
+        // followed by a PushScope so that the node after the payload is proven to start at the right byte
+        B withNext = full;
+        withNext.push_back(1);
+        Decoded d = h.Run(withNext);
+        const DecodedStream &st = d.streams[0];
+        bool ok = st.status == StreamStatus::Ok && st.nodes.size() == 2 && st.nodes[0].runtimeData &&
+                  st.nodes[1].type == NodeType::PushScope;
+        if (!ok)
+            std::printf("  payload %s: status %s: %s\n", p.name, StreamStatusName(st.status), st.message.c_str());
+        CHECK(ok);
+        if (ok)
+        {
+            const RuntimeData &r = *st.nodes[0].runtimeData;
+            CHECK(r.kind == p.kind && r.version == p.version);
+        }
+        // every strict prefix is a truncation, never a success and never a crash
+        for (size_t cut = 1; cut < full.size(); cut++)
+        {
+            B part(full.begin(), full.begin() + cut);
+            StreamStatus s2 = h.Run(part).streams[0].status;
+            CHECK(s2 == StreamStatus::Truncated);
+        }
+        // the dump shows the contents
+        std::vector<uint8_t> dd = h.data;
+        (void)dd;
+    }
+
+    // content checks
+    {
+        auto r_p = RdOf(h, all[0]);
+        const RuntimeData &r = *r_p;
+        CHECK(r.resources.size() == 2 && !r.resources[0].key.isType && r.resources[1].key.isType);
+        CHECK(r.resources[0].token == 5 && r.resources[1].token == 6);
+        CHECK(r.autoUndeferral.size() == 1 && r.legacyImplicitStyleKeys.size() == 1);
+    }
+    {
+        auto r_p = RdOf(h, all[2]);
+        const RuntimeData &r = *r_p;
+        CHECK(r.conditionalResources.size() == 1 && r.conditionalResources[0].tokens.size() == 2 &&
+              r.conditionalResources[0].tokens[1] == 8);
+        CHECK(r.conditionallyDeclared.size() == 1 && r.conditionallyDeclared[0].token == 9 &&
+              r.conditionallyDeclared[0].predicates.size() == 1 && r.conditionallyDeclared[0].predicates[0].type.trusted);
+    }
+    {
+        auto r_p = RdOf(h, all[3]);
+        const RuntimeData &r = *r_p;
+        CHECK(r.resources.size() == 1 && r.resources[0].key.isType && r.resources[0].key.hashAndType == 1 &&
+              r.resources[0].token == 4);
+    }
+    {
+        auto r_p = RdOf(h, all[4]);
+        const RuntimeData &r = *r_p;
+        CHECK(r.setters.size() == 1 && r.setters[0].property.trusted && r.setters[0].container.kind == ConstKind::BoolTrue);
+        auto r2_p = RdOf(h, all[5]);
+        const RuntimeData &r2 = *r2_p;
+        CHECK(r2.setters[0].hasPropertyName && r2.setters[0].stringValue == 2);
+        auto r3_p = RdOf(h, all[6]);
+        const RuntimeData &r3 = *r3_p;
+        CHECK(!r3.setters[0].property.present && r3.setters[0].token == 77);
+        auto r4_p = RdOf(h, all[7]);
+        const RuntimeData &r4 = *r4_p;
+        CHECK(r4.setters[0].token == 5 && r4.setters[0].property.present);
+    }
+    {
+        auto r_p = RdOf(h, all[9]);
+        const RuntimeData &r = *r_p;
+        CHECK(r.visualStates.size() == 1 && r.visualStates[0].propertySetterTokens.size() == 1 &&
+              r.visualStates[0].triggerValues.size() == 1 && r.visualStates[0].triggerValues[0][0] == 9);
+        auto r4_p = RdOf(h, all[11]);
+        const RuntimeData &r4 = *r4_p;
+        CHECK(r4.seenNameDirectives.size() == 1 && r4.transitionMap.size() == 1 && r4.defaultTransitionByGroup.size() == 0);
+        auto r5_p = RdOf(h, all[12]);
+        const RuntimeData &r5 = *r5_p;
+        CHECK(r5.visualStates[0].staticResourceTriggerTokens.size() == 1 && r5.entireCollectionToken == 3);
+        CHECK(r4.transitionMap[0].first.first == 0 && r4.transitionMap[0].first.second == 1 && r4.transitionMap[0].second == 2);
+        auto r6_p = RdOf(h, all[13]);
+        const RuntimeData &r6 = *r6_p;
+        CHECK(r6.elementName == 4);
+        auto r7_p = RdOf(h, all[14]);
+        const RuntimeData &r7 = *r7_p;
+        CHECK(r7.nonDeferredProperties.size() == 1 && !r7.realize);
+        auto r8_p = RdOf(h, all[15]);
+        const RuntimeData &r8 = *r8_p;
+        CHECK(r8.realize);
+    }
+
+    // rejections inside payloads
+    auto st = [&](const Payload &p, const B &body) {
+        Payload q = p;
+        q.body = body;
+        return h.Run(Frame(q)).streams[0].status;
+    };
+    CHECK(st(all[3], {1, 40, 0, 1, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0}) == StreamStatus::BadReference);   // string 40 of 34
+    CHECK(st(all[3], {0xFF, 0xFF, 0xFF, 0xFF, 0x0F}) == StreamStatus::LimitExceeded);
+    CHECK(st(all[3], {50, 0}) == StreamStatus::Truncated);                  // 50 entries announced, none present
+    CHECK(st(all[4], {1, 0x80, 0x02}) == StreamStatus::BadReference);       // flags wider than 8 bits
+    CHECK(st(all[4], {1, 0x30, 1, 0x80, 0}) == StreamStatus::BadReference); // container constant of kind None
+    CHECK(st(all[8], {0, 1, 2, 0, 1, 10}) == StreamStatus::BadReference);   // boolean expected, got a null string
+    CHECK(st(all[11], {0, 0, 0, FALSE_[0], 0, 0, FALSE_[0], 0, 0, 3, 0xFF, 0xFF}) != StreamStatus::Ok);
+    CHECK(st(all[14], {4, 0, 1, 0xFF, 0xFF, TRUE_[0]}) == StreamStatus::BadReference);   // property id >= 0x2000
 }
 
 // Truncating the node bytes at every length must give a status for the cut, never a crash, and
@@ -460,6 +653,7 @@ int main(int argc, char **argv)
     std::string dir = argv[1];
     TestCorpus(dir);
     TestMalformed(dir);
+    TestRuntimeData(dir);
     TestTruncation(dir);
     TestMutation(dir);
     TestRanges(dir);

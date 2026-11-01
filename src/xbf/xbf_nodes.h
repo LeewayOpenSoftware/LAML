@@ -13,7 +13,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "xbf_reader.h"
@@ -99,6 +101,84 @@ struct Constant
     std::u16string text;         // UniqueString
 };
 
+// ---- SetCustomRuntimeData payloads -------------------------------------------------------------
+// Inert copies of the four runtime-data families. String fields are string-table ids; "token"
+// fields are stream-offset tokens exactly as stored (a token names a point inside a deferred stream,
+// it is not resolved here).
+
+enum class RuntimeDataKind : uint8_t { None, ResourceDictionary, Style, VisualStateGroupCollection, DeferredElement };
+const char *RuntimeDataKindName(RuntimeDataKind k);
+
+struct RdKey
+{
+    uint16_t stringId = 0;
+    bool isType = false;        // implicit (type-keyed) resource
+    uint64_t hashAndType = 0;   // version 4 stores the hash and the type flag (bit 0); older versions 0
+};
+struct RdEntry { RdKey key; uint32_t token = 0; };
+struct RdConditional { RdKey key; std::vector<uint32_t> tokens; };
+struct PredicateRef { Ref type; uint16_t argumentsString = 0; };
+struct ConditionallyDeclared { uint32_t token = 0; std::vector<PredicateRef> predicates; };
+
+struct SetterEssence
+{
+    uint8_t flags = 0;          // bit0 theme res, 1 static res, 2 string, 3 object, 4 property resolved, 5 container, 6 token for self, 7 mutable
+    Ref property;               // when the property is resolved
+    uint16_t propertyName = 0;  // otherwise: name (string id) ...
+    Ref ownerType;              // ... and owner type
+    bool hasPropertyName = false;
+    Constant container;         // flags bit 5
+    uint16_t stringValue = 0;   // flags bit 2
+    uint32_t token = 0;         // static / theme / object / self
+};
+
+struct VisualStateEssence
+{
+    uint16_t name = 0;
+    uint32_t storyboardToken = 0;
+    bool hasStoryboard = false;
+    std::vector<uint32_t> propertySetterTokens;
+    std::vector<std::vector<uint32_t>> triggerValues;
+    std::vector<uint32_t> extensibleTriggerTokens, triggerCollectionTokens, staticResourceTriggerTokens;
+};
+struct VisualStateGroupEssence { uint16_t name = 0; bool hasDynamicTimelines = false; uint32_t selfToken = 0; };
+struct VisualTransitionEssence { uint16_t toState = 0, fromState = 0; uint32_t token = 0; };
+
+struct RuntimeData
+{
+    RuntimeDataKind kind = RuntimeDataKind::None;
+    uint32_t typeIndex = 0;     // CustomWriterRuntimeDataTypeIndex as stored
+    uint32_t version = 0;       // 1-based version within the family
+
+    // ResourceDictionary
+    std::vector<RdEntry> resources;                  // explicit and implicit entries together
+    std::vector<uint16_t> autoUndeferral;            // string ids
+    std::vector<RdConditional> conditionalResources;
+    std::vector<uint16_t> legacyImplicitTemplates, legacyImplicitStyleKeys;   // versions 1 and 2 only
+
+    // Style
+    std::vector<SetterEssence> setters;
+
+    // VisualStateGroupCollection
+    std::vector<uint32_t> visualStateToGroup;
+    std::vector<VisualStateEssence> visualStates;
+    std::vector<VisualStateGroupEssence> visualStateGroups;
+    std::vector<VisualTransitionEssence> visualTransitions;
+    bool unexpectedTokensDetected = false;
+    std::vector<std::pair<std::pair<uint32_t, uint32_t>, uint32_t>> transitionMap;   // (from, to) -> transition
+    std::vector<uint32_t> defaultTransitionByGroup;
+    uint32_t entireCollectionToken = 0;
+    std::vector<uint16_t> seenNameDirectives;
+
+    // DeferredElement
+    uint16_t elementName = 0;
+    std::vector<std::pair<Ref, Constant>> nonDeferredProperties;
+    bool realize = false;
+
+    // trailing table for ResourceDictionary 3/4 and Style 3
+    std::vector<ConditionallyDeclared> conditionallyDeclared;
+};
+
 struct Node
 {
     NodeType type = NodeType::PushScope;
@@ -111,6 +191,7 @@ struct Node
     std::vector<uint16_t> resourceStrings;   // SetDeferredProperty: string ids; static first, then theme
     uint32_t staticResourceCount = 0, themeResourceCount = 0;
     uint32_t runtimeDataType = 0;            // SetCustomRuntimeData: CustomWriterRuntimeDataTypeIndex
+    std::shared_ptr<const RuntimeData> runtimeData;   // SetCustomRuntimeData: the decoded payload
     uint32_t depth = 0;          // scope depth before the node
 };
 
@@ -123,7 +204,7 @@ enum class StreamStatus : uint8_t
     BadReference,    // a table index, stream index or constant kind is out of range
     BadScope,        // a scope is closed that was never opened
     LimitExceeded,
-    OpaqueData,      // stops at custom runtime data, whose payload this decoder does not decode (not an error)
+    OpaqueData,      // stops at data this decoder cannot frame (not produced for the known runtime data versions)
 };
 
 const char *StreamStatusName(StreamStatus s);
@@ -154,7 +235,7 @@ struct Decoded
     std::vector<DecodedStream> streams;
     std::vector<std::string> warnings;
     size_t failedStreams = 0;        // streams that ended in an error status (OpaqueData is not an error)
-    size_t opaqueStreams = 0;
+    size_t opaqueStreams = 0;        // streams that stopped at data this decoder does not know
     bool ok() const { return failedStreams == 0; }
 };
 

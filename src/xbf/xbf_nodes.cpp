@@ -53,6 +53,19 @@ const char *NodeTypeName(NodeType t)
     return "?";
 }
 
+const char *RuntimeDataKindName(RuntimeDataKind k)
+{
+    switch (k)
+    {
+    case RuntimeDataKind::None: return "None";
+    case RuntimeDataKind::ResourceDictionary: return "ResourceDictionary";
+    case RuntimeDataKind::Style: return "Style";
+    case RuntimeDataKind::VisualStateGroupCollection: return "VisualStateGroupCollection";
+    case RuntimeDataKind::DeferredElement: return "DeferredElement";
+    }
+    return "?";
+}
+
 const char *StreamStatusName(StreamStatus s)
 {
     switch (s)
@@ -315,6 +328,313 @@ Constant ReadConstant(Cursor &c, const Ctx &x)
     return k;
 }
 
+// ---- runtime data payloads ----------------------------------------------------------------------
+// CustomWriterRuntimeDataTypeIndex values (the numbers are part of the file format).
+struct FamilyInfo
+{
+    RuntimeDataKind kind;
+    uint32_t version;
+};
+
+bool ClassifyRuntimeData(uint32_t typeIndex, FamilyInfo &out)
+{
+    switch (typeIndex)
+    {
+    case 371: out = {RuntimeDataKind::ResourceDictionary, 1}; return true;   // legacy: stable type index
+    case 7: out = {RuntimeDataKind::ResourceDictionary, 2}; return true;
+    case 10: out = {RuntimeDataKind::ResourceDictionary, 3}; return true;
+    case 12: out = {RuntimeDataKind::ResourceDictionary, 4}; return true;
+    case 2: out = {RuntimeDataKind::Style, 1}; return true;
+    case 8: out = {RuntimeDataKind::Style, 2}; return true;
+    case 11: out = {RuntimeDataKind::Style, 3}; return true;
+    case 420: out = {RuntimeDataKind::VisualStateGroupCollection, 1}; return true;   // legacy
+    case 1: out = {RuntimeDataKind::VisualStateGroupCollection, 2}; return true;
+    case 3: out = {RuntimeDataKind::VisualStateGroupCollection, 3}; return true;
+    case 4: out = {RuntimeDataKind::VisualStateGroupCollection, 4}; return true;
+    case 5: out = {RuntimeDataKind::VisualStateGroupCollection, 5}; return true;
+    case 745: out = {RuntimeDataKind::DeferredElement, 1}; return true;   // legacy
+    case 6: out = {RuntimeDataKind::DeferredElement, 2}; return true;
+    case 9: out = {RuntimeDataKind::DeferredElement, 3}; return true;
+    }
+    return false;
+}
+
+// Element count of a persisted container: 7-bit count, bounded by the limit and by the bytes left
+// (every element takes at least `minBytes`), so a damaged count cannot cause a large allocation.
+uint32_t ReadCount(Cursor &c, const Ctx &x, size_t minBytes)
+{
+    uint32_t n = c.V7();
+    if (n > x.limits.maxResourceStrings)
+        Bad(StreamStatus::LimitExceeded, c, "container has more elements than the limit");
+    if ((uint64_t)n * minBytes > c.remaining())
+        Bad(StreamStatus::Truncated, c, "container runs past the end of the stream");
+    return n;
+}
+
+uint16_t ReadStr(Cursor &c, const Ctx &x) { return ReadTableId(c, x.file.strings.size(), "string"); }
+
+bool ReadBoolConstant(Cursor &c, const Ctx &x)
+{
+    size_t at = c.pos();
+    Constant k = ReadConstant(c, x);
+    if (k.kind == ConstKind::BoolTrue)
+        return true;
+    if (k.kind == ConstKind::BoolFalse)
+        return false;
+    throw Fail{StreamStatus::BadReference, (uint32_t)at, "boolean expected"};
+}
+
+std::vector<uint32_t> ReadTokens(Cursor &c, const Ctx &x)
+{
+    std::vector<uint32_t> v;
+    uint32_t n = ReadCount(c, x, 1);
+    for (uint32_t i = 0; i < n; i++)
+        v.push_back(c.V7());
+    return v;
+}
+
+std::vector<uint16_t> ReadStrings(Cursor &c, const Ctx &x)
+{
+    std::vector<uint16_t> v;
+    uint32_t n = ReadCount(c, x, 2);
+    for (uint32_t i = 0; i < n; i++)
+        v.push_back(ReadStr(c, x));
+    return v;
+}
+
+uint64_t ReadFixed64(Cursor &c)
+{
+    uint64_t lo = c.U32();
+    uint64_t hi = c.U32();
+    return lo | (hi << 32);
+}
+
+void ReadResourceDictionary(Cursor &c, const Ctx &x, RuntimeData &d)
+{
+    auto legacyMap = [&](bool implicit) {
+        uint32_t n = ReadCount(c, x, 3);
+        for (uint32_t i = 0; i < n; i++)
+        {
+            RdEntry e;
+            e.key.stringId = ReadStr(c, x);
+            e.key.isType = implicit;
+            e.token = c.V7();
+            d.resources.push_back(e);
+        }
+    };
+    auto legacyConditional = [&](bool implicit) {
+        uint32_t n = ReadCount(c, x, 3);
+        for (uint32_t i = 0; i < n; i++)
+        {
+            RdConditional e;
+            e.key.stringId = ReadStr(c, x);
+            e.key.isType = implicit;
+            e.tokens = ReadTokens(c, x);
+            d.conditionalResources.push_back(std::move(e));
+        }
+    };
+    auto key4 = [&]() {
+        RdKey k;
+        k.stringId = ReadStr(c, x);
+        k.hashAndType = ReadFixed64(c);
+        k.isType = (k.hashAndType & 1) != 0;
+        return k;
+    };
+    switch (d.version)
+    {
+    case 1:
+        legacyMap(false);
+        d.autoUndeferral = ReadStrings(c, x);
+        legacyMap(true);
+        d.legacyImplicitTemplates = ReadStrings(c, x);
+        d.legacyImplicitStyleKeys = ReadStrings(c, x);
+        break;
+    case 2:
+        legacyMap(false);
+        d.autoUndeferral = ReadStrings(c, x);
+        legacyMap(true);
+        d.legacyImplicitStyleKeys = ReadStrings(c, x);
+        break;
+    case 3:
+        legacyMap(false);
+        d.autoUndeferral = ReadStrings(c, x);
+        legacyMap(true);
+        legacyConditional(false);
+        legacyConditional(true);
+        break;
+    default:   // 4
+    {
+        uint32_t n = ReadCount(c, x, 11);
+        for (uint32_t i = 0; i < n; i++)
+        {
+            RdEntry e;
+            e.key = key4();
+            e.token = c.V7();
+            d.resources.push_back(e);
+        }
+        d.autoUndeferral = ReadStrings(c, x);
+        uint32_t m = ReadCount(c, x, 11);
+        for (uint32_t i = 0; i < m; i++)
+        {
+            RdConditional e;
+            e.key = key4();
+            e.tokens = ReadTokens(c, x);
+            d.conditionalResources.push_back(std::move(e));
+        }
+        break;
+    }
+    }
+}
+
+void ReadStyle(Cursor &c, const Ctx &x, RuntimeData &d)
+{
+    uint32_t n = ReadCount(c, x, 2);
+    for (uint32_t i = 0; i < n; i++)
+    {
+        SetterEssence s;
+        uint32_t flags = c.V7();
+        if (flags > 0xFF)
+            Bad(StreamStatus::BadReference, c, "setter flags are wider than 8 bits");
+        s.flags = (uint8_t)flags;
+        const bool theme = flags & 0x01, stat = flags & 0x02, str = flags & 0x04, obj = flags & 0x08,
+                   resolved = flags & 0x10, container = flags & 0x20, self = flags & 0x40;
+        // from version 3 a setter that is a token for itself carries no property
+        if (!(d.version >= 3 && self))
+        {
+            if (resolved)
+                s.property = ReadProperty(c, x);
+            else
+            {
+                s.propertyName = ReadStr(c, x);
+                s.hasPropertyName = true;
+                s.ownerType = ReadType(c, x);
+            }
+        }
+        if (str)
+            s.stringValue = ReadStr(c, x);
+        else if (container)
+            s.container = ReadConstant(c, x);
+        else if (stat || theme || obj || self)
+            s.token = c.V7();
+        d.setters.push_back(std::move(s));
+    }
+}
+
+void ReadVisualStates(Cursor &c, const Ctx &x, RuntimeData &d)
+{
+    d.visualStateToGroup = ReadTokens(c, x);
+    uint32_t n = ReadCount(c, x, 4);
+    for (uint32_t i = 0; i < n; i++)
+    {
+        VisualStateEssence e;
+        e.name = ReadStr(c, x);
+        e.storyboardToken = c.V7();
+        e.hasStoryboard = ReadBoolConstant(c, x);
+        if (d.version >= 2)
+        {
+            e.propertySetterTokens = ReadTokens(c, x);
+            uint32_t outer = ReadCount(c, x, 1);
+            for (uint32_t k = 0; k < outer; k++)
+                e.triggerValues.push_back(ReadTokens(c, x));
+            if (d.version >= 3)
+            {
+                e.extensibleTriggerTokens = ReadTokens(c, x);
+                e.triggerCollectionTokens = ReadTokens(c, x);
+                if (d.version >= 5)
+                    e.staticResourceTriggerTokens = ReadTokens(c, x);
+            }
+        }
+        d.visualStates.push_back(std::move(e));
+    }
+    uint32_t g = ReadCount(c, x, 4);
+    for (uint32_t i = 0; i < g; i++)
+    {
+        VisualStateGroupEssence e;
+        e.name = ReadStr(c, x);
+        e.hasDynamicTimelines = ReadBoolConstant(c, x);
+        e.selfToken = c.V7();
+        d.visualStateGroups.push_back(e);
+    }
+    uint32_t t = ReadCount(c, x, 5);
+    for (uint32_t i = 0; i < t; i++)
+    {
+        VisualTransitionEssence e;
+        e.toState = ReadStr(c, x);
+        e.fromState = ReadStr(c, x);
+        e.token = c.V7();
+        d.visualTransitions.push_back(e);
+    }
+    d.unexpectedTokensDetected = ReadBoolConstant(c, x);
+    uint32_t m = ReadCount(c, x, 3);
+    for (uint32_t i = 0; i < m; i++)
+    {
+        uint32_t from = c.V7(), to = c.V7(), tr = c.V7();
+        d.transitionMap.push_back({{from, to}, tr});
+    }
+    d.defaultTransitionByGroup = ReadTokens(c, x);
+    d.entireCollectionToken = c.V7();
+    if (d.version == 4 || d.version == 5)
+        d.seenNameDirectives = ReadStrings(c, x);
+}
+
+void ReadDeferredElement(Cursor &c, const Ctx &x, RuntimeData &d)
+{
+    d.elementName = ReadStr(c, x);
+    if (d.version >= 2)
+    {
+        uint32_t n = ReadCount(c, x, 3);
+        for (uint32_t i = 0; i < n; i++)
+        {
+            Ref p = ReadProperty(c, x);
+            Constant k = ReadConstant(c, x);
+            d.nonDeferredProperties.push_back({p, std::move(k)});
+        }
+        if (d.version >= 3)
+            d.realize = ReadBoolConstant(c, x);
+    }
+}
+
+// Returns null for a runtime data version this decoder does not know (the caller stops the stream).
+std::shared_ptr<const RuntimeData> ReadRuntimeData(Cursor &c, const Ctx &x, uint32_t typeIndex)
+{
+    FamilyInfo fi;
+    if (!ClassifyRuntimeData(typeIndex, fi))
+        return nullptr;
+    auto d = std::make_shared<RuntimeData>();
+    d->kind = fi.kind;
+    d->version = fi.version;
+    d->typeIndex = typeIndex;
+    switch (fi.kind)
+    {
+    case RuntimeDataKind::ResourceDictionary: ReadResourceDictionary(c, x, *d); break;
+    case RuntimeDataKind::Style: ReadStyle(c, x, *d); break;
+    case RuntimeDataKind::VisualStateGroupCollection: ReadVisualStates(c, x, *d); break;
+    case RuntimeDataKind::DeferredElement: ReadDeferredElement(c, x, *d); break;
+    case RuntimeDataKind::None: break;
+    }
+    const bool hasConditional = (fi.kind == RuntimeDataKind::ResourceDictionary && fi.version >= 3) ||
+                                (fi.kind == RuntimeDataKind::Style && fi.version >= 3);
+    if (hasConditional)
+    {
+        uint32_t n = ReadCount(c, x, 2);
+        for (uint32_t i = 0; i < n; i++)
+        {
+            ConditionallyDeclared cd;
+            cd.token = c.V7();
+            uint32_t m = ReadCount(c, x, 4);
+            for (uint32_t k = 0; k < m; k++)
+            {
+                PredicateRef pr;
+                pr.type = ReadType(c, x);
+                pr.argumentsString = ReadStr(c, x);
+                cd.predicates.push_back(pr);
+            }
+            d->conditionallyDeclared.push_back(std::move(cd));
+        }
+    }
+    return d;
+}
+
 void DecodeOperands(Cursor &c, Node &n, const Ctx &x, const DecodeLimits &lim)
 {
     switch (n.type)
@@ -416,6 +736,7 @@ void DecodeOperands(Cursor &c, Node &n, const Ctx &x, const DecodeLimits &lim)
         for (uint64_t i = 0; i < total; i++)
             n.resourceStrings.push_back(ReadTableId(c, x.file.strings.size(), "string"));
         n.runtimeDataType = c.V7();
+        n.runtimeData = ReadRuntimeData(c, x, n.runtimeDataType);   // null: unknown version
         break;
     }
     }
@@ -500,7 +821,8 @@ void DecodeStream(const uint8_t *nodes, size_t nodeLen, const uint8_t *lines, si
                 condDepth--;
             }
 
-            bool opaque = n.type == NodeType::SetCustomRuntimeData;
+            // A runtime data version this decoder does not know cannot be framed: the stream stops there.
+            bool opaque = n.type == NodeType::SetCustomRuntimeData && !n.runtimeData;
             out.nodes.push_back(std::move(n));
             totalNodes++;
             if (opaque)
@@ -509,7 +831,7 @@ void DecodeStream(const uint8_t *nodes, size_t nodeLen, const uint8_t *lines, si
                 // cannot be framed. This is a stop, not a malformed stream.
                 out.status = StreamStatus::OpaqueData;
                 out.errorOffset = (uint32_t)c.pos();
-                out.message = "custom runtime data payload is not decoded; decoding of this stream stops here";
+                out.message = "custom runtime data of an unsupported version; decoding of this stream stops here";
                 out.finalDepth = depth;
                 out.finalConditionalDepth = condDepth;
                 return;
@@ -693,6 +1015,68 @@ std::string ConstText(const uint8_t *d, size_t sz, const File &f, const Constant
     return o;
 }
 
+void DumpRuntimeData(std::string &o, const uint8_t *d, size_t sz, const File &f, const RuntimeData &r)
+{
+    auto S = [&](uint32_t id) { return "\"" + Str(d, sz, f, id) + "\""; };
+    auto toks = [](const std::vector<uint32_t> &v) {
+        std::string t = "[";
+        for (size_t i = 0; i < v.size(); i++)
+            t += (i ? "," : "") + std::to_string(v[i]);
+        return t + "]";
+    };
+    Fmt(o, "           %s v%u (type %u)\n", RuntimeDataKindName(r.kind), r.version, r.typeIndex);
+    for (const RdEntry &e : r.resources)
+        Fmt(o, "             resource %s%s -> token %u\n", e.key.isType ? "[type] " : "", S(e.key.stringId).c_str(), e.token);
+    for (const RdConditional &e : r.conditionalResources)
+        Fmt(o, "             conditional resource %s%s -> tokens %s\n", e.key.isType ? "[type] " : "",
+            S(e.key.stringId).c_str(), toks(e.tokens).c_str());
+    for (uint16_t s : r.autoUndeferral)
+        Fmt(o, "             auto-undeferral %s\n", S(s).c_str());
+    for (uint16_t s : r.legacyImplicitTemplates)
+        Fmt(o, "             legacy implicit template %s\n", S(s).c_str());
+    for (uint16_t s : r.legacyImplicitStyleKeys)
+        Fmt(o, "             legacy implicit style key %s\n", S(s).c_str());
+    for (const SetterEssence &s : r.setters)
+    {
+        Fmt(o, "             setter flags=0x%02x", s.flags);
+        if (s.property.present) o += " prop=" + PropName(d, sz, f, s.property);
+        if (s.hasPropertyName) o += " name=" + S(s.propertyName) + " owner=" + TypeName(d, sz, f, s.ownerType);
+        if (s.flags & 0x04) o += " string=" + S(s.stringValue);
+        else if (s.flags & 0x20) o += " value=" + ConstText(d, sz, f, s.container);
+        else if (s.flags & 0x4B) Fmt(o, " token=%u", s.token);
+        o += "\n";
+    }
+    if (r.kind == RuntimeDataKind::VisualStateGroupCollection)
+    {
+        Fmt(o, "             state->group %s, entire-collection token %u, unexpected tokens %s\n",
+            toks(r.visualStateToGroup).c_str(), r.entireCollectionToken, r.unexpectedTokensDetected ? "yes" : "no");
+        for (const auto &v : r.visualStates)
+            Fmt(o, "             state %s storyboard=%s token %u setters %s triggers %zu\n", S(v.name).c_str(),
+                v.hasStoryboard ? "yes" : "no", v.storyboardToken, toks(v.propertySetterTokens).c_str(),
+                v.triggerValues.size());
+        for (const auto &g : r.visualStateGroups)
+            Fmt(o, "             group %s dynamic-timelines=%s token %u\n", S(g.name).c_str(),
+                g.hasDynamicTimelines ? "yes" : "no", g.selfToken);
+        for (const auto &t : r.visualTransitions)
+            Fmt(o, "             transition %s -> %s token %u\n", S(t.fromState).c_str(), S(t.toState).c_str(), t.token);
+        for (uint16_t s : r.seenNameDirectives)
+            Fmt(o, "             name directive %s\n", S(s).c_str());
+    }
+    if (r.kind == RuntimeDataKind::DeferredElement)
+    {
+        Fmt(o, "             element name %s realize=%s\n", S(r.elementName).c_str(), r.realize ? "yes" : "no");
+        for (const auto &p : r.nonDeferredProperties)
+            Fmt(o, "             property %s = %s\n", PropName(d, sz, f, p.first).c_str(), ConstText(d, sz, f, p.second).c_str());
+    }
+    for (const ConditionallyDeclared &cd : r.conditionallyDeclared)
+    {
+        Fmt(o, "             conditionally declared token %u:", cd.token);
+        for (const PredicateRef &p : cd.predicates)
+            o += " " + TypeName(d, sz, f, p.type) + "(" + Str(d, sz, f, p.argumentsString) + ")";
+        o += "\n";
+    }
+}
+
 }  // namespace
 
 std::string DumpNodes(const uint8_t *d, size_t sz, const File &f, const Decoded &dec)
@@ -743,6 +1127,8 @@ std::string DumpNodes(const uint8_t *d, size_t sz, const File &f, const Decoded 
             if (n.type == NodeType::SetCustomRuntimeData)
                 Fmt(o, " runtime-data-type=%u", n.runtimeDataType);
             o += "\n";
+            if (n.runtimeData)
+                DumpRuntimeData(o, d, sz, f, *n.runtimeData);
         }
     }
     for (const std::string &w : dec.warnings)
