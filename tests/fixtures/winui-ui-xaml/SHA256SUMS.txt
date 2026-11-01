@@ -1,0 +1,5 @@
+c80043179fbf7955651f5d3ef0f6b35dd5530671a0d5dc1147788c26cfbb573e *tests/fixtures/winui-ui-xaml/CustomTypesPage.xbf
+7d5431ac31a3ab5a9455591ebfd4e6f272eff6e5522902869c64b4d19a2a0b86 *tests/fixtures/winui-ui-xaml/PageWithConditionalXaml.xbf
+8b4c017b7bb6c85b9777970c6c07e8749130731a10c36d03c14b5cfee47e7672 *tests/fixtures/winui-ui-xaml/SampleWithChecksum.xbf
+ed7bfc13548f43c5f29160165d804492ed5b7c11030b860ac4e0112f8bf30183 *tests/fixtures/winui-ui-xaml/SampleXbf2.xbf
+722a1c71a03f70cddf0eae122efd51f998d1dafb278a273573f7a2334ffa7509 *tests/fixtures/winui-ui-xaml/XbfVsmTest.v2.1.xbf

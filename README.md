@@ -12,14 +12,20 @@ the Leeway Open Software fork of LiberNT.
 
 ## Status
 
-**Design.** No code yet. The design document for LevRT and LAML together is in
-[docs/DESIGN.md](docs/DESIGN.md).
+**Early code.** The design document for LevRT and LAML together is in
+[docs/DESIGN.md](docs/DESIGN.md). The first code is the XBF structure reader (`src/xbf`,
+`tools/xbfdump`, `tests/xbf_tests.cpp`, described in [docs/XBF.md](docs/XBF.md)): it parses,
+validates and describes the container of a binary XAML file. It does not decode nodes and
+activates nothing.
 
 ## Clean-room rule
 
-Only public Microsoft documentation, Wine and ReactOS sources, and observable
-behaviour are used as references. No Microsoft code, strings, disassembly,
-`.winmd` or `.xbf` data is copied into this repository.
+Only public Microsoft documentation, Wine and ReactOS sources, observable behaviour and
+Microsoft-authored source that is explicitly MIT-licensed (owner policy; provenance, notices and
+license audit are recorded in [PROVENANCE.md](PROVENANCE.md)) are used as references. No
+proprietary Microsoft code, strings, disassembly, Windows SDK or operating-system `.winmd` or
+`.xbf` data is copied into this repository; the only `.xbf` files in it are the MIT-licensed test
+resources listed in PROVENANCE.md.
 
 ## License
 
