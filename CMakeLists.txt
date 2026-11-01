@@ -17,3 +17,12 @@ enable_testing()
 add_executable(xbf_tests tests/xbf_tests.cpp)
 target_link_libraries(xbf_tests PRIVATE laml_xbf)
 add_test(NAME xbf_tests COMMAND xbf_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/winui-ui-xaml)
+
+# Animation math: KeySpline and the XAML easing functions (adapted from MIT-licensed Microsoft.UI.Xaml).
+add_library(laml_anim STATIC src/anim/keyspline.cpp src/anim/easing.cpp)
+target_include_directories(laml_anim PUBLIC src)
+target_compile_options(laml_anim PRIVATE -Wall -Wextra)
+
+add_executable(anim_tests tests/anim_tests.cpp)
+target_link_libraries(anim_tests PRIVATE laml_anim)
+add_test(NAME anim_tests COMMAND anim_tests)
