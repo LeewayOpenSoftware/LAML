@@ -4,23 +4,29 @@
 // xbfdump: print the container structure of a .xbf file (header, string table, metadata lists,
 // node-stream index). It never decodes nodes and never loads or runs anything.
 //
-//   xbfdump <file.xbf>      exit 0 = valid, 1 = invalid or unsupported (reason printed), 2 = usage/IO
+//   xbfdump <file.xbf>           exit 0 = valid, 1 = invalid or unsupported (reason printed), 2 = usage/IO
+//   xbfdump --nodes <file.xbf>   also decode the node streams and print them as a tree (inert: nothing is
+//                                created or activated); exit 1 if a node stream is malformed
 #include <cstdio>
+#include <cstring>
 #include <vector>
 
+#include "../../src/xbf/xbf_nodes.h"
 #include "../../src/xbf/xbf_reader.h"
 
 int main(int argc, char **argv)
 {
-    if (argc != 2)
+    bool nodes = argc == 3 && std::strcmp(argv[1], "--nodes") == 0;
+    if (argc != 2 && !nodes)
     {
-        std::fputs("usage: xbfdump <file.xbf>\n", stderr);
+        std::fputs("usage: xbfdump [--nodes] <file.xbf>\n", stderr);
         return 2;
     }
-    FILE *f = std::fopen(argv[1], "rb");
+    const char *path = argv[argc - 1];
+    FILE *f = std::fopen(path, "rb");
     if (!f)
     {
-        std::fprintf(stderr, "xbfdump: cannot open %s\n", argv[1]);
+        std::fprintf(stderr, "xbfdump: cannot open %s\n", path);
         return 2;
     }
     std::vector<uint8_t> data;
@@ -45,5 +51,12 @@ int main(int argc, char **argv)
         return 1;
     }
     std::fputs(laml::xbf::Dump(data.data(), data.size(), file).c_str(), stdout);
+    if (nodes)
+    {
+        laml::xbf::Decoded decoded;
+        laml::xbf::DecodeNodes(data.data(), data.size(), file, decoded);
+        std::fputs(laml::xbf::DumpNodes(data.data(), data.size(), file, decoded).c_str(), stdout);
+        return decoded.ok() ? 0 : 1;
+    }
     return 0;
 }
