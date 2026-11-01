@@ -26,3 +26,12 @@ target_compile_options(laml_anim PRIVATE -Wall -Wextra)
 add_executable(anim_tests tests/anim_tests.cpp)
 target_link_libraries(anim_tests PRIVATE laml_anim)
 add_test(NAME anim_tests COMMAND anim_tests)
+
+# Resource lookup: ResourceDictionary with merged and theme dictionaries (independent implementation).
+add_library(laml_resources STATIC src/resources/resource_dictionary.cpp)
+target_include_directories(laml_resources PUBLIC src)
+target_compile_options(laml_resources PRIVATE -Wall -Wextra)
+
+add_executable(resource_tests tests/resource_tests.cpp)
+target_link_libraries(resource_tests PRIVATE laml_resources)
+add_test(NAME resource_tests COMMAND resource_tests)
