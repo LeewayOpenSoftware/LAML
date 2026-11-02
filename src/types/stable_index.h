@@ -27,6 +27,7 @@ struct StableType
 {
     std::string name;       // current name; empty for a retired slot
     std::string original;   // name in the first column
+    std::string originalBase;   // `original` without the _Deleted<N> suffix (the name the slot had before it was retired)
     bool retired = false;
 };
 
@@ -36,6 +37,10 @@ struct StableProperty
     std::string original;
     std::string owner;      // type part
     std::string member;     // member part
+    // For a retired slot: the owner and member its original name had, when the original name can be split
+    // against the type names (live or retired) of the table; empty otherwise.
+    std::string originalOwner;
+    std::string originalMember;
     bool retired = false;
 };
 
@@ -65,6 +70,7 @@ private:
     std::vector<StableType> types_;
     std::vector<StableProperty> props_;
     std::unordered_map<std::string, uint32_t> typeByName_;
+    std::unordered_map<std::string, uint32_t> typeByBase_;     // original name without _Deleted<N>, live or retired
     std::unordered_map<std::string, uint32_t> propByName_;
 };
 
