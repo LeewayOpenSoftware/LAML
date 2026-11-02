@@ -24,6 +24,9 @@ native registry of types, namespaces, inheritance and property metadata with a t
 read-only bridge to the XBF reader, and an optional import of the WinUI stable index tables. It still
 creates no objects, renders nothing and has no visual tree.
 
+M3 (local branch `m3-logical-tree`, not merged: awaiting review) resolves XBF references against the catalog and
+builds a GUI-independent logical tree from the node streams ([docs/TREE.md](docs/TREE.md)).
+
 ## Clean-room rule
 
 Only public Microsoft documentation, Wine and ReactOS sources, observable behaviour and

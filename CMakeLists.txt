@@ -60,3 +60,15 @@ add_test(NAME types_xbf_tests COMMAND types_xbf_tests ${CMAKE_CURRENT_SOURCE_DIR
 add_executable(stable_index_tests tests/stable_index_tests.cpp)
 target_link_libraries(stable_index_tests PRIVATE laml_types)
 add_test(NAME stable_index_tests COMMAND stable_index_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/winui-metadata ${CMAKE_CURRENT_SOURCE_DIR}/data/xaml-core.types)
+
+# Logical tree (M3): XBF references resolved against the type catalog, and the node stream folded into a
+# GUI-independent tree of descriptions. No objects are created and nothing is rendered.
+add_library(laml_tree STATIC src/tree/ref_resolver.cpp src/tree/logical_tree.cpp)
+target_include_directories(laml_tree PUBLIC src)
+target_link_libraries(laml_tree PUBLIC laml_types laml_xbf)
+target_compile_options(laml_tree PRIVATE -Wall -Wextra)
+
+add_executable(tree_tests tests/tree_tests.cpp)
+target_link_libraries(tree_tests PRIVATE laml_tree)
+add_test(NAME tree_tests COMMAND tree_tests ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/winui-ui-xaml
+         ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/winui-metadata ${CMAKE_CURRENT_SOURCE_DIR}/data/xaml-core.types)

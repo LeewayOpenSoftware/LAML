@@ -75,6 +75,11 @@ static void TestRealTables(const std::string &dir)
     CHECK(t.Type(15) && t.Type(15)->retired && t.Type(15)->original == "DataPackage_Deleted0" && t.Type(15)->name.empty());
     CHECK(t.FindType("DataPackage_Deleted0") == -1 && t.FindType("UnknownType") == -1);
     CHECK(t.Property(104) && t.Property(104)->retired);
+    // retired slots keep their original names, split against the type names of the table
+    CHECK(t.Type(15)->originalBase == "DataPackage" && t.Type(1)->originalBase == "Byte");
+    CHECK(t.Type(528) && t.Type(528)->retired && t.Type(528)->originalBase == "ProgressBar");
+    CHECK(t.Property(1118) && t.Property(1118)->retired && t.Property(1118)->originalOwner == "ProgressBar" &&
+          t.Property(1118)->originalMember == "IsIndeterminate");
 
     // every live property has a live owner type
     size_t orphans = 0;

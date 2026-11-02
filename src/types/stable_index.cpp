@@ -28,6 +28,18 @@ bool NameChars(const std::string &s)
     return true;
 }
 
+// "Name_Deleted3" -> "Name"; other names unchanged
+std::string StripDeleted(const std::string &name)
+{
+    size_t pos = name.rfind("_Deleted");
+    if (pos == std::string::npos || pos == 0)
+        return name;
+    for (size_t i = pos + 8; i < name.size(); i++)
+        if (name[i] < '0' || name[i] > '9')
+            return name;
+    return name.substr(0, pos);
+}
+
 struct Row
 {
     std::string original, current;
@@ -90,6 +102,7 @@ Result StableTable::LoadTypes(const char *text, size_t size)
     types_.clear();
     props_.clear();
     typeByName_.clear();
+    typeByBase_.clear();
     propByName_.clear();
     std::vector<Row> rows;
     Result r = ParseRows(text, size, rows);
@@ -101,7 +114,10 @@ Result StableTable::LoadTypes(const char *text, size_t size)
     {
         StableType t;
         t.original = rows[i].original;
+        t.originalBase = StripDeleted(t.original);
         t.retired = (rows[i].current == "UnknownType");
+        if (i > 0)
+            typeByBase_.emplace(t.originalBase, static_cast<uint32_t>(i));
         if (!t.retired)
             t.name = rows[i].current;
         if (!t.retired)
@@ -110,6 +126,7 @@ Result StableTable::LoadTypes(const char *text, size_t size)
             {
                 types_.clear();
                 typeByName_.clear();
+                typeByBase_.clear();
                 return Fail(Status::Duplicate, i + 1, "type '" + t.name + "' appears twice");
             }
         }
@@ -135,6 +152,21 @@ Result StableTable::LoadProperties(const char *text, size_t size)
         StableProperty p;
         p.original = rows[i].original;
         p.retired = (rows[i].current == "UnknownType_UnknownProperty");
+        if (p.retired && i > 0)
+        {
+            std::string base = StripDeleted(p.original);
+            for (size_t u = base.size(); u-- > 1;)
+            {
+                if (base[u] != '_' || u + 1 >= base.size())
+                    continue;
+                if (typeByBase_.count(base.substr(0, u)))
+                {
+                    p.originalOwner = base.substr(0, u);
+                    p.originalMember = base.substr(u + 1);
+                    break;
+                }
+            }
+        }
         if (!p.retired)
         {
             p.name = rows[i].current;
