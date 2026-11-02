@@ -397,7 +397,8 @@ static void TestNotImplemented(const Env &e)
     CHECK(grid.notes.size() == 2);
     CHECK(t2.counts.notImplementedOps == 4);          // property bag, runtime data, conditional scope, ProvideValue
     CHECK(t2.nodes.size() == 2 && t2.nodes[1].conditionalDepth == 1 && grid.conditionalDepth == 0);
-    CHECK(t2.ok());
+    // the runtime data above names stream 0 from stream 0: since M4 a reference must point to a later stream
+    CHECK(t2.counts.structureErrors == 1 && !t2.ok());
 
     // deferred property keeps the target stream
     StreamBuilder dp;

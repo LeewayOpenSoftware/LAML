@@ -26,6 +26,17 @@ const char *ValueKindName(ValueKind kind)
     return "?";
 }
 
+const char *LinkViaName(LinkVia via)
+{
+    switch (via)
+    {
+    case LinkVia::None: return "none";
+    case LinkVia::DeferredProperty: return "SetDeferredProperty";
+    case LinkVia::RuntimeData: return "SetCustomRuntimeData";
+    }
+    return "?";
+}
+
 const char *DiagKindName(DiagKind kind)
 {
     switch (kind)
@@ -66,6 +77,15 @@ public:
         out_.streams.resize(decoded_.streams.size());
         for (uint32_t s = 0; s < decoded_.streams.size(); s++)
             BuildStream(s);
+        for (uint32_t s = 1; s < out_.streams.size(); s++)
+            if (!out_.streams[s].link.linked)
+            {
+                out_.counts.orphanStreams++;
+                stream_ = s;
+                cur_ = nullptr;
+                nodeIndex_ = 0;
+                Diag(DiagKind::NotImplemented, "stream " + std::to_string(s) + " is not referenced by any earlier stream (not linked)");
+            }
     }
 
 private:
@@ -189,8 +209,10 @@ private:
                 return &out_.nodes[it->instance];
         if (stream_ > 0 && out_.nodes.size() < limits_.maxNodes)
         {
-            // A deferred stream continues a scope of its parent stream: the object it acts on is not in this
-            // stream. Stand in for it with an explicit placeholder; linking it to the parent is not done in M3.
+            // A deferred stream continues a scope of the stream that references it: the object it acts on is
+            // not in this stream. Stand in for it with an explicit placeholder. When the referencing node is
+            // known (see Link) the placeholder points at the object it stands for: the referencing node's
+            // parent when that node is a member (PushScopeGetValue) of an object, else the node itself.
             if (frames_.empty())
                 frames_.emplace_back();
             TypeResolution none;
@@ -198,10 +220,21 @@ private:
             node.external = true;
             out_.counts.objects--;
             out_.counts.externalContexts++;
+            const StreamLink &link = out_.streams[stream_].link;
+            bool linked = false;
+            if (link.linked && link.node < out_.nodes.size())
+            {
+                const LogicalNode &from = out_.nodes[link.node];
+                uint32_t ctx = from.fromMember && from.parent != kNoNode ? from.parent : link.node;
+                out_.nodes[node.id].contextNode = ctx;
+                out_.counts.linkedContexts++;
+                linked = true;
+            }
             frames_.front().instance = node.id;
             frames_.front().created = false;
             out_.streams[stream_].roots.push_back(node.id);
-            Diag(DiagKind::NotImplemented, std::string(what) + ": the object this deferred stream acts on is in another stream (not linked)");
+            if (!linked)
+                Diag(DiagKind::NotImplemented, std::string(what) + ": the object this deferred stream acts on is in another stream (not linked: no earlier stream references this one)");
             return &out_.nodes[node.id];
         }
         Diag(DiagKind::MalformedStructure, std::string(what) + ": there is no object in any open scope to apply it to");
@@ -312,6 +345,42 @@ private:
             return;
         target->properties.push_back(std::move(a));
         out_.counts.assignments++;
+        const Assignment &placed = target->properties.back();
+        if (placed.value.kind == ValueKind::Deferred)
+            Link(placed.value.targetStream, target->id, LinkVia::DeferredProperty, placed.property);
+    }
+
+    // A reference from this stream to a later one. Streams are laid out so that a stream is referenced from an
+    // earlier stream; a reference that does not point forward, or a second reference to the same stream, breaks
+    // that layout and is reported as a structure error (the first reference is kept).
+    void Link(uint32_t target, uint32_t node, LinkVia via, const PropertyResolution &property)
+    {
+        if (target >= out_.streams.size())
+        {
+            Diag(DiagKind::MalformedStructure, "deferred stream " + std::to_string(target) + " does not exist (the file has " +
+                                                   std::to_string(out_.streams.size()) + " streams)");
+            return;
+        }
+        if (target <= stream_)
+        {
+            Diag(DiagKind::MalformedStructure, "deferred stream " + std::to_string(target) + " is referenced from stream " +
+                                                   std::to_string(stream_) + ": a reference must point to a later stream");
+            return;
+        }
+        StreamLink &l = out_.streams[target].link;
+        if (l.linked)
+        {
+            Diag(DiagKind::MalformedStructure, "deferred stream " + std::to_string(target) + " is referenced twice (first from stream " +
+                                                   std::to_string(l.fromStream) + "); the first reference is kept");
+            return;
+        }
+        l.linked = true;
+        l.fromStream = stream_;
+        l.node = node;
+        l.via = via;
+        l.property = property;
+        out_.nodes[node].linkedStreams.push_back(target);
+        out_.counts.linkedStreams++;
     }
 
     void BuildStream(uint32_t s)
@@ -551,6 +620,7 @@ private:
                            std::to_string(n.runtimeData->version);
                 note += " in stream " + std::to_string(n.targetStream) + " (kept, not interpreted)";
                 t->notes.push_back(note);
+                Link(n.targetStream, t->id, LinkVia::RuntimeData, PropertyResolution());
             }
             Diag(DiagKind::NotImplemented, "SetCustomRuntimeData: the payload is decoded by the XBF layer but not interpreted by the tree");
             break;
@@ -679,7 +749,9 @@ void DumpNode(const LogicalTree &t, uint32_t id, int depth, std::string &out)
     }
     const LogicalNode &n = t.nodes[id];
     std::string ind(depth * 2, ' ');
-    if (n.external)
+    if (n.external && n.contextNode != kNoNode)
+        out += ind + "stands for node " + std::to_string(n.contextNode) + " of stream " + std::to_string(t.nodes[n.contextNode].stream) + "\n";
+    else if (n.external)
         out += ind + "object of another stream (deferred stream context, not linked)\n";
     else if (n.fromMember)
         out += ind + "member value of " + PropText(n.member) + "\n";
@@ -709,6 +781,14 @@ void DumpNode(const LogicalTree &t, uint32_t id, int depth, std::string &out)
         if (i.value.kind == ValueKind::Object || i.value.kind == ValueKind::MarkupExtension)
             DumpNode(t, i.value.object, depth + 2, out);
     }
+    for (uint32_t sid : n.linkedStreams)
+    {
+        if (sid >= t.streams.size())
+            continue;
+        out += ind + "  deferred stream " + std::to_string(sid) + " (" + LinkViaName(t.streams[sid].link.via) + ") ->\n";
+        for (uint32_t r : t.streams[sid].roots)
+            DumpNode(t, r, depth + 2, out);
+    }
 }
 
 }  // namespace
@@ -733,6 +813,13 @@ std::string DumpLogicalTree(const LogicalTree &tree)
             out += "  xmlns:" + Utf8(ns.prefix) + " = " + ns.uri + "\n";
         if (st.hasPeerType)
             out += "  peer type " + Utf8(st.peerType) + "\n";
+        if (st.link.linked)
+        {
+            // shown under the node that references it
+            out += "  linked: node " + std::to_string(st.link.node) + " of stream " + std::to_string(st.link.fromStream) + " via " +
+                   LinkViaName(st.link.via) + "\n";
+            continue;
+        }
         for (uint32_t r : st.roots)
             DumpNode(tree, r, 1, out);
     }

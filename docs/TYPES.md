@@ -29,10 +29,12 @@ Nothing here instantiates an object, resolves a type to code, renders, or builds
 ```
 laml-types 1
 xmlns <uri> <type-namespace>
-type <FullName> [kind=class|struct|enum|interface|primitive|directive] [abstract] [sealed] [base=<FullName>] [content=<Property>]
-prop <OwnerFullName>.<Name> <ValueFullName> [attached] [readonly] [dependency]
-enumval <OwnerFullName> <Value>
+source <id> <location> <revision> <license>
+type <FullName> [kind=class|struct|enum|interface|primitive|directive] [abstract] [sealed] [flags] [base=<FullName>] [content=<Property>] [src=<source id>]
+prop <OwnerFullName>.<Name> <ValueFullName> [attached] [readonly] [dependency] [nullable]
+enumval <OwnerFullName> <Value>[=<number>]
 ```
+M4 additions: `source` records say where metadata came from (`src=` ties a type to one; an undeclared source is `UnknownSource`); an enum is numbered completely (`Value=<decimal or 0x-hex>`) or not at all; `flags` marks an enum whose values are bit flags; `nullable` marks a property whose value may be absent. See [M4.md](M4.md).
 `#` starts a comment at the start of a token; a UTF-8 BOM and CRLF are accepted; the first meaningful line must be `laml-types 1`. The loader stops at the first bad line and reports its number; lines before it stay declared.
 
 ## XBF bridge: what was learned from the real files

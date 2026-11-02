@@ -81,7 +81,7 @@ Coverage of the new code was exercised through these tests; no line-coverage too
 5. **Values are not typed.** A constant is kept as stored; a type converter is named, never applied; no property value is checked against the property's value type.
 6. **Collections vs. single-value members** are not told apart beyond the stream's own operations; a `SetValue` of an object into a collection-typed property is not flagged.
 7. **Operations that rely on semantics not documented in the sources read** are `NotImplemented` (list above).
-8. **Deferred streams are not linked** to the property that references them.
+8. **Deferred streams are not linked** to the property that references them. (Done in M4, see [M4.md](M4.md); the runtime-data tokens are still not followed.)
 9. **Single format family:** XBF 2.0/2.1 only, as in M1.
 
 ## Proposal for M4

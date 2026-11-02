@@ -27,6 +27,10 @@ creates no objects, renders nothing and has no visual tree.
 M3 (local branch `m3-logical-tree`, not merged: awaiting review) resolves XBF references against the catalog and
 builds a GUI-independent logical tree from the node streams ([docs/TREE.md](docs/TREE.md)).
 
+M4 (local branch `m4-deferred-validation`, not merged: awaiting review) links deferred streams to the nodes that
+reference them, validates property values, enums and properties against the catalog, and adds a WinUI catalog
+extracted from the public IDL with source traceability ([docs/M4.md](docs/M4.md)).
+
 ## Clean-room rule
 
 Only public Microsoft documentation, Wine and ReactOS sources, observable behaviour and

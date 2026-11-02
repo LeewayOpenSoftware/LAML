@@ -4,11 +4,44 @@
 // LAML type metadata, plain-text loader. The format is described in type_catalog.h.
 #include "types/type_catalog.h"
 
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 
 namespace laml::types {
 
 namespace {
+
+// Decimal or 0x-hex, optional leading '-', the whole text must be consumed and fit in int64_t.
+bool ParseNumber(const std::string &s, int64_t &out)
+{
+    if (s.empty())
+        return false;
+    size_t i = 0;
+    bool neg = false;
+    if (s[0] == '-' || s[0] == '+')
+    {
+        neg = s[0] == '-';
+        i = 1;
+    }
+    int base = 10;
+    if (s.size() > i + 2 && s[i] == '0' && (s[i + 1] == 'x' || s[i + 1] == 'X'))
+    {
+        base = 16;
+        i += 2;
+    }
+    if (i >= s.size() || s[i] == '-' || s[i] == '+' || s[i] == ' ')
+        return false;
+    errno = 0;
+    char *end = nullptr;
+    unsigned long long v = std::strtoull(s.c_str() + i, &end, base);
+    if (errno != 0 || *end != '\0')
+        return false;
+    if (neg ? v > 0x8000000000000000ull : v > 0x7fffffffffffffffull)
+        return false;
+    out = neg ? static_cast<int64_t>(0 - v) : static_cast<int64_t>(v);
+    return true;
+}
 
 Result LineError(size_t line, Status status, const std::string &message)
 {
@@ -54,6 +87,17 @@ Result Apply(Catalog &catalog, const std::vector<std::string> &t, size_t line)
             return LineError(line, Status::Syntax, "xmlns needs <uri> <type-namespace>");
         r = catalog.MapXmlNamespace(t[1], t[2]);
     }
+    else if (t[0] == "source")
+    {
+        if (t.size() != 5)
+            return LineError(line, Status::Syntax, "source needs <id> <location> <revision> <license>");
+        Source s;
+        s.id = t[1];
+        s.location = t[2];
+        s.revision = t[3];
+        s.license = t[4];
+        r = catalog.AddSource(s);
+    }
     else if (t[0] == "type")
     {
         if (t.size() < 2)
@@ -66,6 +110,15 @@ Result Apply(Catalog &catalog, const std::vector<std::string> &t, size_t line)
             const std::string &o = t[i];
             if (o == "abstract") d.flags |= kTypeAbstract;
             else if (o == "sealed") d.flags |= kTypeSealed;
+            else if (o == "flags") d.flags |= kTypeFlags;
+            else if (StartsWith(o, "src="))
+            {
+                if (!d.source.empty())
+                    return LineError(line, Status::Syntax, "src given twice");
+                d.source = o.substr(4);
+                if (d.source.empty())
+                    return LineError(line, Status::Syntax, "src needs a source id");
+            }
             else if (StartsWith(o, "kind="))
             {
                 if (haveKind)
@@ -114,6 +167,7 @@ Result Apply(Catalog &catalog, const std::vector<std::string> &t, size_t line)
             if (t[i] == "attached") d.flags |= kPropAttached;
             else if (t[i] == "readonly") d.flags |= kPropReadOnly;
             else if (t[i] == "dependency") d.flags |= kPropDependency;
+            else if (t[i] == "nullable") d.flags |= kPropNullable;
             else return LineError(line, Status::Syntax, "unknown prop option '" + t[i] + "'");
         }
         r = catalog.AddProperty(t[1].substr(0, dot), d);
@@ -122,7 +176,16 @@ Result Apply(Catalog &catalog, const std::vector<std::string> &t, size_t line)
     {
         if (t.size() != 3)
             return LineError(line, Status::Syntax, "enumval needs <Owner> <Value>");
-        r = catalog.AddEnumValue(t[1], t[2]);
+        size_t eq = t[2].find('=');
+        if (eq == std::string::npos)
+            r = catalog.AddEnumValue(t[1], t[2]);
+        else
+        {
+            int64_t number = 0;
+            if (!ParseNumber(t[2].substr(eq + 1), number))
+                return LineError(line, Status::Syntax, "enum value number is not a decimal or 0x-hex integer: '" + t[2] + "'");
+            r = catalog.AddEnumValue(t[1], t[2].substr(0, eq), number);
+        }
     }
     else
         return LineError(line, Status::Syntax, "unknown directive '" + t[0] + "'");

@@ -36,6 +36,7 @@ const char *StatusName(Status status)
     case Status::BadKind: return "BadKind";
     case Status::Unresolved: return "Unresolved";
     case Status::Syntax: return "Syntax";
+    case Status::UnknownSource: return "UnknownSource";
     }
     return "?";
 }
@@ -114,6 +115,10 @@ Result Catalog::AddType(const TypeDecl &decl)
         return Fail(Status::Unresolved, "type '" + decl.fullName + "' is its own base");
     if ((decl.flags & kTypeUnknown) != 0)
         return Fail(Status::BadKind, "the Unknown flag is set by RecordUnknown only");
+    if ((decl.flags & kTypeFlags) != 0 && decl.kind != Kind::Enum)
+        return Fail(Status::BadKind, "the flags option is for enums only");
+    if (!decl.source.empty() && FindSource(decl.source) == nullptr)
+        return Fail(Status::UnknownSource, "type '" + decl.fullName + "' names the undeclared source '" + decl.source + "'");
 
     TypeInfo *slot = nullptr;
     auto it = byFullName_.find(decl.fullName);
@@ -139,7 +144,66 @@ Result Catalog::AddType(const TypeDecl &decl)
     slot->baseName = decl.baseName;
     slot->base = kNoType;
     slot->contentProperty = decl.contentProperty;
+    slot->source = decl.source;
     return Result();
+}
+
+Result Catalog::AddSource(const Source &source)
+{
+    if (resolved_)
+        return Fail(Status::Frozen, "catalog is resolved");
+    if (source.id.empty() || source.location.empty() || source.revision.empty() || source.license.empty())
+        return Fail(Status::EmptyName, "a source needs an id, a location, a revision and a license");
+    if (source.id.size() > limits_.maxNameChars || source.location.size() > limits_.maxNameChars ||
+        source.revision.size() > limits_.maxNameChars || source.license.size() > limits_.maxNameChars)
+        return Fail(Status::LimitExceeded, "source field longer than the limit");
+    if (FindSource(source.id) != nullptr)
+        return Fail(Status::Duplicate, "source '" + source.id + "' already declared");
+    if (sources_.size() >= limits_.maxSources)
+        return Fail(Status::LimitExceeded, "too many sources");
+    sources_.push_back(source);
+    return Result();
+}
+
+const Source *Catalog::FindSource(const std::string &id) const
+{
+    for (const Source &s : sources_)
+        if (s.id == id)
+            return &s;
+    return nullptr;
+}
+
+bool Catalog::EnumIsNumbered(TypeId type) const
+{
+    const TypeInfo *t = Get(type);
+    return t && t->kind == Kind::Enum && !t->enumValues.empty() && t->enumNumbers.size() == t->enumValues.size();
+}
+
+bool Catalog::EnumAccepts(TypeId type, int64_t number) const
+{
+    if (!EnumIsNumbered(type))
+        return false;
+    const TypeInfo *t = Get(type);
+    int64_t all = 0;
+    for (int64_t n : t->enumNumbers)
+    {
+        if (n == number)
+            return true;
+        all |= n;
+    }
+    // A flags enum takes any combination of its values; the bits must all belong to the declared ones.
+    return (t->flags & kTypeFlags) != 0 && number >= 0 && (number & ~all) == 0;
+}
+
+const std::string *Catalog::EnumNameOf(TypeId type, int64_t number) const
+{
+    if (!EnumIsNumbered(type))
+        return nullptr;
+    const TypeInfo *t = Get(type);
+    for (size_t i = 0; i < t->enumNumbers.size(); i++)
+        if (t->enumNumbers[i] == number)
+            return &t->enumValues[i];
+    return nullptr;
 }
 
 Result Catalog::AddProperty(const std::string &ownerFullName, const PropertyDecl &decl)
@@ -174,6 +238,16 @@ Result Catalog::AddProperty(const std::string &ownerFullName, const PropertyDecl
 
 Result Catalog::AddEnumValue(const std::string &ownerFullName, const std::string &value)
 {
+    return AddEnumImpl(ownerFullName, value, false, 0);
+}
+
+Result Catalog::AddEnumValue(const std::string &ownerFullName, const std::string &value, int64_t number)
+{
+    return AddEnumImpl(ownerFullName, value, true, number);
+}
+
+Result Catalog::AddEnumImpl(const std::string &ownerFullName, const std::string &value, bool numbered, int64_t number)
+{
     if (resolved_)
         return Fail(Status::Frozen, "catalog is resolved");
     Result r = CheckName(value, false);
@@ -189,7 +263,14 @@ Result Catalog::AddEnumValue(const std::string &ownerFullName, const std::string
         return Fail(Status::Duplicate, "enum value '" + value + "' already declared on '" + ownerFullName + "'");
     if (owner.enumValues.size() >= limits_.maxEnumValuesPerType)
         return Fail(Status::LimitExceeded, "too many enum values on '" + ownerFullName + "'");
+    // an enum is numbered from its first value on or not at all
+    if (numbered && !owner.enumValues.empty() && owner.enumNumbers.empty())
+        return Fail(Status::BadKind, "enum '" + ownerFullName + "' has unnumbered values; '" + value + "' cannot have a number");
+    if (!numbered && !owner.enumNumbers.empty())
+        return Fail(Status::BadKind, "enum '" + ownerFullName + "' has numbered values; '" + value + "' needs a number");
     owner.enumValues.push_back(value);
+    if (numbered)
+        owner.enumNumbers.push_back(number);
     return Result();
 }
 

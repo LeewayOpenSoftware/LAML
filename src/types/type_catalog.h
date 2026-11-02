@@ -30,10 +30,12 @@ const char *KindName(Kind kind);
 constexpr uint32_t kTypeAbstract = 0x01;
 constexpr uint32_t kTypeSealed = 0x02;
 constexpr uint32_t kTypeUnknown = 0x04;   // placeholder for a name seen in markup but not declared
+constexpr uint32_t kTypeFlags = 0x08;     // enum whose values are bit flags (any OR of the values is valid)
 
 constexpr uint32_t kPropAttached = 0x01;
 constexpr uint32_t kPropReadOnly = 0x02;
 constexpr uint32_t kPropDependency = 0x04;
+constexpr uint32_t kPropNullable = 0x08;  // the value may be absent (a nullable wrapper around the value type)
 
 enum class Status : uint8_t
 {
@@ -47,6 +49,7 @@ enum class Status : uint8_t
     BadKind,          // enum values on a non-enum, content property that does not exist, ...
     Unresolved,       // Resolve() found a base type that is not declared, or a cycle
     Syntax,           // text loader: malformed line
+    UnknownSource,    // a type names a source that was not declared
 };
 const char *StatusName(Status status);
 
@@ -66,6 +69,7 @@ struct Limits
     uint32_t maxNameChars = 1024;
     uint32_t maxHierarchyDepth = 256;
     uint32_t maxXmlMappings = 1u << 16;
+    uint32_t maxSources = 1u << 12;
     uint32_t maxTextLineChars = 8192;
     uint32_t maxTextLines = 1u << 22;
 };
@@ -77,6 +81,16 @@ struct TypeDecl
     uint32_t flags = 0;
     std::string baseName;           // full name, may be declared later; empty for a root
     std::string contentProperty;    // name of a property declared on this type or a base; empty for none
+    std::string source;             // id of a declared Source (AddSource); empty = not stated
+};
+
+// Where the metadata of a type came from, so that every entry can be traced to a public document.
+struct Source
+{
+    std::string id;                 // short identifier used by `src=` in the text format
+    std::string location;           // URL or repository path of the public document
+    std::string revision;           // commit, version or retrieval date that pins the document
+    std::string license;            // licence of the document (e.g. MIT) or "public-documentation"
 };
 
 struct PropertyDecl
@@ -108,6 +122,8 @@ struct TypeInfo
     std::string contentProperty;
     std::vector<Property> properties;       // declared on this type only
     std::vector<std::string> enumValues;    // Enum kind only, declaration order
+    std::vector<int64_t> enumNumbers;       // parallel to enumValues when the numbers are declared; else empty
+    std::string source;                     // id of the Source this entry was taken from; empty = not stated
     bool isUnknown() const { return (flags & kTypeUnknown) != 0; }
 };
 
@@ -136,6 +152,11 @@ public:
     Result AddType(const TypeDecl &decl);
     Result AddProperty(const std::string &ownerFullName, const PropertyDecl &decl);
     Result AddEnumValue(const std::string &ownerFullName, const std::string &value);
+    // The same with the value's number. An enum is either fully numbered or not at all: mixing the two
+    // forms on one enum is BadKind.
+    Result AddEnumValue(const std::string &ownerFullName, const std::string &value, int64_t number);
+    // Declare where metadata comes from; ids are unique. TypeDecl::source must name a declared one.
+    Result AddSource(const Source &source);
     // An xmlns URI maps to one or more type namespaces, searched in the order they were added.
     Result MapXmlNamespace(const std::string &uri, const std::string &typeNamespace);
 
@@ -163,6 +184,18 @@ public:
     // xmlns URI + local name, e.g. ("http://schemas.microsoft.com/winfx/2006/xaml/presentation", "Button").
     XmlResolution ResolveXmlName(const std::string &uri, const std::string &localName) const;
 
+    const std::vector<Source> &sources() const { return sources_; }
+    const Source *FindSource(const std::string &id) const;
+
+    // ---- enum values (the enum must be declared; the catalog need not be resolved) ------
+    // True when the enum declares numbers for its values.
+    bool EnumIsNumbered(TypeId type) const;
+    // A numbered enum accepts a number that is one of its values, or - for a flags enum - any OR of them
+    // (zero included). An unnumbered enum accepts nothing: ask EnumIsNumbered first.
+    bool EnumAccepts(TypeId type, int64_t number) const;
+    // Name of the value with that number; nullptr if there is none.
+    const std::string *EnumNameOf(TypeId type, int64_t number) const;
+
     // ---- resolved-catalog queries -------------------------------------------------------
     // True when `derived` is `base` or inherits from it. False for unknown ids or an unresolved catalog.
     bool IsAssignable(TypeId derived, TypeId base) const;
@@ -181,10 +214,12 @@ public:
 
 private:
     Result CheckName(const std::string &name, bool dotted) const;
+    Result AddEnumImpl(const std::string &ownerFullName, const std::string &value, bool numbered, int64_t number);
 
     Limits limits_;
     bool resolved_ = false;
     std::vector<Problem> warnings_;
+    std::vector<Source> sources_;
     std::vector<TypeInfo> types_;                             // index = id - 1
     std::unordered_map<std::string, TypeId> byFullName_;
     std::map<std::string, std::vector<std::string>> xmlMap_;   // uri -> namespaces, in order
@@ -194,10 +229,11 @@ private:
 // Line format (UTF-8, '#' starts a comment, fields separated by spaces or tabs):
 //   laml-types 1                                   (required first line)
 //   xmlns <uri> <type-namespace>
-//   type <FullName> [kind=class|struct|enum|interface|primitive|directive] [abstract] [sealed]
-//        [base=<FullName>] [content=<Property>]
-//   prop <OwnerFullName>.<Name> <ValueFullName> [attached] [readonly] [dependency]
-//   enumval <OwnerFullName> <Value>
+//   source <id> <location> <revision> <license>    (words without spaces; declare before use)
+//   type <FullName> [kind=class|struct|enum|interface|primitive|directive] [abstract] [sealed] [flags]
+//        [base=<FullName>] [content=<Property>] [src=<source id>]
+//   prop <OwnerFullName>.<Name> <ValueFullName> [attached] [readonly] [dependency] [nullable]
+//   enumval <OwnerFullName> <Value>[=<number>]    (decimal, or hex with 0x; negative allowed)
 // Declarations only; the caller runs Resolve(). Stops at the first bad line.
 Result LoadText(Catalog &catalog, const char *text, size_t size);
 

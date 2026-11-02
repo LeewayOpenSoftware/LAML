@@ -82,7 +82,9 @@ struct LogicalNode
     uint32_t stream = 0;
     TypeResolution type;                 // the object's type; for a member-collection node, see `fromMember`
     bool fromMember = false;             // not created: it is the value of `member` on its parent (PushScopeGetValue)
-    bool external = false;               // stands for an object that lives in another stream (deferred streams); not linked yet
+    bool external = false;               // stands for an object that lives in another stream (deferred streams)
+    uint32_t contextNode = kNoNode;      // external only: the node of the referencing stream it stands for (kNoNode = not linked)
+    std::vector<uint32_t> linkedStreams; // streams that this node references (SetDeferredProperty, SetCustomRuntimeData), in order
     PropertyResolution member;
     uint32_t parent = kNoNode;           // node whose frame this node was created or fetched in
     bool hasInitialValue = false;        // created "with constant"
@@ -123,8 +125,24 @@ struct Namespace
     SourcePos pos;
 };
 
+// How a deferred stream is reached from an earlier one. A stream after the first is the body of something the
+// stream that references it only names: a template or resource body (SetDeferredProperty) or the content that
+// a runtime-data payload tokenises (SetCustomRuntimeData).
+enum class LinkVia : uint8_t { None, DeferredProperty, RuntimeData };
+const char *LinkViaName(LinkVia via);
+
+struct StreamLink
+{
+    bool linked = false;
+    uint32_t fromStream = 0;
+    uint32_t node = kNoNode;     // the node of fromStream that references this stream
+    LinkVia via = LinkVia::None;
+    PropertyResolution property; // DeferredProperty: the property the stream is the value of
+};
+
 struct StreamTree
 {
+    StreamLink link;                    // stream 0 and unreferenced streams stay unlinked
     xbf::StreamStatus status = xbf::StreamStatus::Ok;   // the decoder's result for this stream
     std::vector<uint32_t> roots;        // objects that finished (or were created) with no enclosing frame
     std::vector<Namespace> namespaces;
@@ -140,7 +158,10 @@ struct TreeCounts
     size_t propertiesResolved = 0, propertiesUnknown = 0, propertiesInvalid = 0, propertiesUnimplemented = 0;
     size_t directives = 0;
     size_t retiredStableRefs = 0;        // trusted references that hit a retired slot (resolved by the slot's original name)
-    size_t externalContexts = 0;         // deferred streams that act on an object of another stream (not linked in M3)
+    size_t externalContexts = 0;         // placeholders for objects of another stream that a deferred stream acts on
+    size_t linkedContexts = 0;           // ... of which the referencing stream is known and the placeholder points at its node
+    size_t linkedStreams = 0;            // deferred streams reached from an earlier stream
+    size_t orphanStreams = 0;            // streams after the first that no earlier stream references (not linked)
     size_t notImplementedOps = 0;
     size_t structureErrors = 0;
 };
