@@ -1,0 +1,80 @@
+# LAML seed catalog: a SMALL, hand-written subset of the public XAML type surface, as a worked
+# example of the text metadata format and as test input. Written from the public documentation
+# names (type, base type, property, value type); NOT generated from, and not a copy of, any
+# Microsoft metadata table. It is deliberately incomplete: see docs/TYPES.md for the gaps.
+laml-types 1
+
+xmlns http://schemas.microsoft.com/winfx/2006/xaml/presentation Microsoft.UI.Xaml
+xmlns http://schemas.microsoft.com/winfx/2006/xaml/presentation Microsoft.UI.Xaml.Controls
+xmlns http://schemas.microsoft.com/winfx/2006/xaml/presentation Microsoft.UI.Xaml.Controls.Primitives
+xmlns http://schemas.microsoft.com/winfx/2006/xaml/presentation Microsoft.UI.Xaml.Media
+xmlns http://schemas.microsoft.com/winfx/2006/xaml/presentation Microsoft.UI.Xaml.Shapes
+xmlns http://schemas.microsoft.com/winfx/2006/xaml/presentation LamlCore
+
+# primitives
+type LamlCore.Object
+type LamlCore.String kind=primitive
+type LamlCore.Boolean kind=primitive
+type LamlCore.Double kind=primitive
+type LamlCore.Int32 kind=primitive
+
+# enums
+type Microsoft.UI.Xaml.Visibility kind=enum
+enumval Microsoft.UI.Xaml.Visibility Visible
+enumval Microsoft.UI.Xaml.Visibility Collapsed
+type Microsoft.UI.Xaml.HorizontalAlignment kind=enum
+enumval Microsoft.UI.Xaml.HorizontalAlignment Left
+enumval Microsoft.UI.Xaml.HorizontalAlignment Center
+enumval Microsoft.UI.Xaml.HorizontalAlignment Right
+enumval Microsoft.UI.Xaml.HorizontalAlignment Stretch
+type Microsoft.UI.Xaml.VerticalAlignment kind=enum
+enumval Microsoft.UI.Xaml.VerticalAlignment Top
+enumval Microsoft.UI.Xaml.VerticalAlignment Center
+enumval Microsoft.UI.Xaml.VerticalAlignment Bottom
+enumval Microsoft.UI.Xaml.VerticalAlignment Stretch
+type Microsoft.UI.Xaml.Controls.Orientation kind=enum
+enumval Microsoft.UI.Xaml.Controls.Orientation Vertical
+enumval Microsoft.UI.Xaml.Controls.Orientation Horizontal
+
+# structs
+type Microsoft.UI.Xaml.Thickness kind=struct
+type Microsoft.UI.Xaml.GridLength kind=struct
+type Microsoft.UI.Xaml.Media.Brush abstract base=LamlCore.Object
+
+# object model chain
+type Microsoft.UI.Xaml.DependencyObject base=LamlCore.Object
+type Microsoft.UI.Xaml.UIElement base=Microsoft.UI.Xaml.DependencyObject
+type Microsoft.UI.Xaml.FrameworkElement base=Microsoft.UI.Xaml.UIElement
+type Microsoft.UI.Xaml.Controls.Control base=Microsoft.UI.Xaml.FrameworkElement
+type Microsoft.UI.Xaml.Controls.ContentControl base=Microsoft.UI.Xaml.Controls.Control content=Content
+type Microsoft.UI.Xaml.Controls.Button base=Microsoft.UI.Xaml.Controls.ContentControl
+type Microsoft.UI.Xaml.Controls.TextBlock base=Microsoft.UI.Xaml.FrameworkElement content=Text
+type Microsoft.UI.Xaml.Controls.Panel abstract base=Microsoft.UI.Xaml.FrameworkElement content=Children
+type Microsoft.UI.Xaml.Controls.StackPanel base=Microsoft.UI.Xaml.Controls.Panel
+type Microsoft.UI.Xaml.Controls.Grid base=Microsoft.UI.Xaml.Controls.Panel
+type Microsoft.UI.Xaml.Controls.UIElementCollection base=LamlCore.Object
+type Microsoft.UI.Xaml.Controls.Page base=Microsoft.UI.Xaml.Controls.UserControl
+type Microsoft.UI.Xaml.Controls.UserControl base=Microsoft.UI.Xaml.Controls.Control content=Content
+
+prop Microsoft.UI.Xaml.UIElement.Visibility Microsoft.UI.Xaml.Visibility dependency
+prop Microsoft.UI.Xaml.UIElement.Opacity LamlCore.Double dependency
+prop Microsoft.UI.Xaml.UIElement.IsHitTestVisible LamlCore.Boolean dependency
+prop Microsoft.UI.Xaml.FrameworkElement.Width LamlCore.Double dependency
+prop Microsoft.UI.Xaml.FrameworkElement.Height LamlCore.Double dependency
+prop Microsoft.UI.Xaml.FrameworkElement.Margin Microsoft.UI.Xaml.Thickness dependency
+prop Microsoft.UI.Xaml.FrameworkElement.HorizontalAlignment Microsoft.UI.Xaml.HorizontalAlignment dependency
+prop Microsoft.UI.Xaml.FrameworkElement.VerticalAlignment Microsoft.UI.Xaml.VerticalAlignment dependency
+prop Microsoft.UI.Xaml.FrameworkElement.Name LamlCore.String
+prop Microsoft.UI.Xaml.FrameworkElement.Tag LamlCore.Object dependency
+prop Microsoft.UI.Xaml.Controls.Control.Background Microsoft.UI.Xaml.Media.Brush dependency
+prop Microsoft.UI.Xaml.Controls.Control.Foreground Microsoft.UI.Xaml.Media.Brush dependency
+prop Microsoft.UI.Xaml.Controls.Control.IsEnabled LamlCore.Boolean dependency
+prop Microsoft.UI.Xaml.Controls.ContentControl.Content LamlCore.Object dependency
+prop Microsoft.UI.Xaml.Controls.UserControl.Content LamlCore.Object dependency
+prop Microsoft.UI.Xaml.Controls.TextBlock.Text LamlCore.String dependency
+prop Microsoft.UI.Xaml.Controls.Panel.Children Microsoft.UI.Xaml.Controls.UIElementCollection readonly
+prop Microsoft.UI.Xaml.Controls.StackPanel.Orientation Microsoft.UI.Xaml.Controls.Orientation dependency
+prop Microsoft.UI.Xaml.Controls.Grid.Row LamlCore.Int32 attached dependency
+prop Microsoft.UI.Xaml.Controls.Grid.Column LamlCore.Int32 attached dependency
+prop Microsoft.UI.Xaml.Controls.Grid.RowSpan LamlCore.Int32 attached dependency
+prop Microsoft.UI.Xaml.Controls.Grid.ColumnSpan LamlCore.Int32 attached dependency

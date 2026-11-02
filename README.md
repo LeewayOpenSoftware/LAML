@@ -19,6 +19,11 @@ validates and describes the container of a binary XAML file. It does not decode 
 activates nothing. A second step (`src/xbf/xbf_nodes`, `xbfdump --nodes`) decodes the node streams into an
 inert list of records and validates them; it still creates no objects.
 
+M2 adds the type catalog and property system (`src/types`, described in [docs/TYPES.md](docs/TYPES.md)): a
+native registry of types, namespaces, inheritance and property metadata with a text metadata format, a
+read-only bridge to the XBF reader, and an optional import of the WinUI stable index tables. It still
+creates no objects, renders nothing and has no visual tree.
+
 ## Clean-room rule
 
 Only public Microsoft documentation, Wine and ReactOS sources, observable behaviour and
