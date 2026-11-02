@@ -1,6 +1,5 @@
-# LAML
-
-LAML: Leeway Application Markup Language, XAML-compatible UI for LiberNT
+<img width="2172" height="724" alt="Banner tecnológico LAML en azul brillante" src="https://github.com/user-attachments/assets/dd9b0676-1623-42d2-a390-2b85067ff3fd" />
+# LAML: Leeway Application Markup Language, XAML-compatible UI for LiberNT
 
 ## Purpose
 
