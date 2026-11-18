@@ -4,11 +4,19 @@ project(LAML LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+function(laml_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra)
+    endif()
+endfunction()
+
 # XBF structure reader: parse, validate and describe the container of a binary XAML file.
 # No node decoding, no activation.
 add_library(laml_xbf STATIC src/xbf/xbf_reader.cpp src/xbf/xbf_nodes.cpp)
 target_include_directories(laml_xbf PUBLIC src)
-target_compile_options(laml_xbf PRIVATE -Wall -Wextra)
+laml_warnings(laml_xbf)
 
 add_executable(xbfdump tools/xbfdump/xbfdump.cpp)
 target_link_libraries(xbfdump PRIVATE laml_xbf)
@@ -26,7 +34,7 @@ add_test(NAME xbf_nodes_tests COMMAND xbf_nodes_tests ${CMAKE_CURRENT_SOURCE_DIR
 # Animation math: KeySpline and the XAML easing functions (adapted from MIT-licensed Microsoft.UI.Xaml).
 add_library(laml_anim STATIC src/anim/keyspline.cpp src/anim/easing.cpp)
 target_include_directories(laml_anim PUBLIC src)
-target_compile_options(laml_anim PRIVATE -Wall -Wextra)
+laml_warnings(laml_anim)
 
 add_executable(anim_tests tests/anim_tests.cpp)
 target_link_libraries(anim_tests PRIVATE laml_anim)
@@ -35,7 +43,7 @@ add_test(NAME anim_tests COMMAND anim_tests)
 # Resource lookup: ResourceDictionary with merged and theme dictionaries (independent implementation).
 add_library(laml_resources STATIC src/resources/resource_dictionary.cpp)
 target_include_directories(laml_resources PUBLIC src)
-target_compile_options(laml_resources PRIVATE -Wall -Wextra)
+laml_warnings(laml_resources)
 
 add_executable(resource_tests tests/resource_tests.cpp)
 target_link_libraries(resource_tests PRIVATE laml_resources)
@@ -46,7 +54,7 @@ add_test(NAME resource_tests COMMAND resource_tests)
 add_library(laml_types STATIC src/types/type_catalog.cpp src/types/metadata_text.cpp src/types/xbf_bridge.cpp src/types/stable_index.cpp)
 target_include_directories(laml_types PUBLIC src)
 target_link_libraries(laml_types PUBLIC laml_xbf)
-target_compile_options(laml_types PRIVATE -Wall -Wextra)
+laml_warnings(laml_types)
 
 add_executable(types_tests tests/types_tests.cpp)
 target_link_libraries(types_tests PRIVATE laml_types)
@@ -66,7 +74,7 @@ add_test(NAME stable_index_tests COMMAND stable_index_tests ${CMAKE_CURRENT_SOUR
 add_library(laml_tree STATIC src/tree/ref_resolver.cpp src/tree/logical_tree.cpp src/tree/validate.cpp)
 target_include_directories(laml_tree PUBLIC src)
 target_link_libraries(laml_tree PUBLIC laml_types laml_xbf)
-target_compile_options(laml_tree PRIVATE -Wall -Wextra)
+laml_warnings(laml_tree)
 
 add_executable(tree_tests tests/tree_tests.cpp)
 target_link_libraries(tree_tests PRIVATE laml_tree)
